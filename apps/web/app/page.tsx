@@ -151,6 +151,7 @@ function NoteList({ session }: { session: Session }) {
   const [notes, setNotes] = useState<NoteWithRecordings[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [uploading, setUploading] = useState(false);
   const [transcribing, setTranscribing] = useState<string | null>(null);
   const [player, setPlayer] = useState<{
     recordingId: string;
@@ -187,6 +188,59 @@ function NoteList({ session }: { session: Session }) {
       title: `새 취재 메모 ${new Date().toLocaleString("ko-KR")}`,
     });
     if (!error) loadNotes();
+  }
+
+  // 통화녹음 등 외부 음성 파일 업로드 → 녹음과 동일한 STT 파이프라인
+  async function uploadAudioFile(file: File) {
+    const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+    const contentTypes: Record<string, string> = {
+      mp3: "audio/mpeg",
+      m4a: "audio/mp4",
+    };
+    if (!contentTypes[ext]) {
+      alert("mp3 또는 m4a 파일만 업로드할 수 있습니다.");
+      return;
+    }
+    setUploading(true);
+    try {
+      const { data: note, error: noteErr } = await supabase
+        .from("notes")
+        .insert({ user_id: session.user.id, title: file.name, status: "active" })
+        .select()
+        .single();
+      if (noteErr) throw noteErr;
+
+      const { data: rec, error: recErr } = await supabase
+        .from("recordings")
+        .insert({
+          note_id: note.id,
+          user_id: session.user.id,
+          storage_path: "",
+          status: "uploading",
+        })
+        .select()
+        .single();
+      if (recErr) throw recErr;
+
+      const path = `${session.user.id}/${rec.id}.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from("recordings")
+        .upload(path, file, { contentType: contentTypes[ext] });
+      if (upErr) throw upErr;
+
+      await supabase
+        .from("recordings")
+        .update({ storage_path: path, status: "uploaded" })
+        .eq("id", rec.id);
+      supabase.functions.invoke("transcribe", {
+        body: { recording_id: rec.id },
+      });
+      loadNotes();
+    } catch (e) {
+      alert(`업로드 실패: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setUploading(false);
+    }
   }
 
   async function saveTitle() {
@@ -313,6 +367,20 @@ function NoteList({ session }: { session: Session }) {
           <button className="btn" onClick={createNote}>
             + 새 노트
           </button>
+          <label className="btn" style={{ cursor: "pointer" }}>
+            {uploading ? "업로드 중…" : "🎧 파일 업로드"}
+            <input
+              type="file"
+              accept=".mp3,.m4a,audio/mpeg,audio/mp4,audio/x-m4a"
+              style={{ display: "none" }}
+              disabled={uploading}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) uploadAudioFile(f);
+                e.target.value = "";
+              }}
+            />
+          </label>
         </div>
 
         {loading ? (
@@ -356,6 +424,9 @@ function NoteList({ session }: { session: Session }) {
                   <div className="note-meta">
                     {new Date(n.updated_at).toLocaleString("ko-KR")}
                   </div>
+                  {n.memo && (
+                    <div className="note-memo">✎ {n.memo}</div>
+                  )}
                 </div>
                 <button
                   className="btn-ghost danger"

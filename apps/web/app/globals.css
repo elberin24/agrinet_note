@@ -1,15 +1,16 @@
+/* 들녘 팔레트 — 논밭의 저채도 파스텔 (모바일 theme.ts와 동일 계열) */
 :root {
-  --bg: #f5f6f8;
-  --card: #ffffff;
-  --ink: #1a1c20;
-  --muted: #6b7280;
-  --line: #e5e7eb;
-  --accent: #2563eb;
-  --accent-soft: #e8f0fe;
-  --danger: #dc2626;
-  --rec: #d92d20;
-  --ok: #15803d;
-  --warn: #b45309;
+  --bg: #edeae0;
+  --card: #fbfaf5;
+  --ink: #2b2f28;
+  --muted: #757a6b;
+  --line: #e4dfd1;
+  --accent: #5f7749;
+  --accent-soft: #dee7d2;
+  --danger: #a85e44;
+  --rec: #c57a5d;
+  --ok: #5f7749;
+  --warn: #8a7327;
 }
 
 * {
@@ -131,7 +132,7 @@ textarea {
   color: var(--danger);
 }
 .btn-ghost.danger:hover {
-  background: #fee2e2;
+  background: #f3dad1;
 }
 
 /* ===== 노트 카드 ===== */
@@ -174,6 +175,12 @@ textarea {
   color: var(--muted);
   margin-top: 2px;
 }
+.note-memo {
+  font-size: 13px;
+  color: var(--accent);
+  margin-top: 6px;
+  font-weight: 600;
+}
 
 /* ===== 녹음 블록 ===== */
 .recording-box {
@@ -198,19 +205,19 @@ textarea {
   font-weight: 600;
 }
 .pill.done {
-  background: #dcfce7;
+  background: #dee7d2;
   color: var(--ok);
 }
 .pill.busy {
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: #d8e3e5;
+  color: #3f6169;
 }
 .pill.failed {
-  background: #fee2e2;
+  background: #f3dad1;
   color: var(--danger);
 }
 .pill.wait {
-  background: #fef3c7;
+  background: #efe6c9;
   color: var(--warn);
 }
 

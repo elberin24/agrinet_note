@@ -83,7 +83,9 @@ Deno.serve(async (req) => {
     if (dlErr || !file) throw new Error(`파일 다운로드 실패: ${dlErr?.message}`);
 
     const form = new FormData();
-    form.append("file", file, "audio.m4a");
+    // 확장자 유지 — OpenAI가 파일명으로 포맷(mp3/m4a)을 인식한다
+    const fileName = rec.storage_path.split("/").pop() ?? "audio.m4a";
+    form.append("file", file, fileName);
     form.append("model", STT_MODEL);
     form.append("language", "ko");
     form.append("prompt", PROMPT);

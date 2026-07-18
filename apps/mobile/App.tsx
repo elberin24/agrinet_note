@@ -15,32 +15,22 @@ import {
   SafeAreaProvider,
   SafeAreaView,
 } from "react-native-safe-area-context";
+import * as DocumentPicker from "expo-document-picker";
 import type { Session } from "@supabase/supabase-js";
 import type { Note, RecordingStatus } from "@chwijae/core";
+import { C } from "./theme";
 import { supabase } from "./lib/supabase";
-import { RecordScreen } from "./components/RecordScreen";
-import { processQueue } from "./lib/uploadQueue";
+import { enqueueFile, processQueue } from "./lib/uploadQueue";
+import { RecordField } from "./components/RecordField";
+import { SideMenu, type MenuTarget } from "./components/SideMenu";
+import { SettingsScreen } from "./screens/SettingsScreen";
+import { SourcesScreen } from "./screens/SourcesScreen";
 
 type NoteRow = Note & {
   recordings: { id: string; storage_path: string; status: RecordingStatus }[];
 };
 
-const COLORS = {
-  bg: "#f5f6f8",
-  card: "#ffffff",
-  ink: "#1a1c20",
-  muted: "#6b7280",
-  line: "#e5e7eb",
-  accent: "#2563eb",
-  accentSoft: "#e8f0fe",
-  danger: "#dc2626",
-  rec: "#d92d20",
-  ok: "#15803d",
-  okSoft: "#dcfce7",
-  warn: "#b45309",
-  warnSoft: "#fef3c7",
-  dangerSoft: "#fee2e2",
-};
+type Screen = "home" | "settings" | "sources";
 
 function errorMessage(message: string): string {
   if (message.includes("Invalid login credentials"))
@@ -58,12 +48,20 @@ function noteStatus(
   const statuses = n.recordings.map((r) => r.status);
   if (statuses.length === 0) return null;
   if (statuses.includes("uploading") || statuses.includes("transcribing"))
-    return { label: "변환 중", bg: COLORS.accentSoft, fg: COLORS.accent };
+    return { label: "변환 중", bg: C.skySoft, fg: C.skyDeep };
   if (statuses.includes("failed"))
-    return { label: "변환 실패", bg: COLORS.dangerSoft, fg: COLORS.danger };
+    return { label: "변환 실패", bg: C.claySoft, fg: C.clayDeep };
   if (statuses.includes("uploaded"))
-    return { label: "변환 대기", bg: COLORS.warnSoft, fg: COLORS.warn };
-  return { label: "변환 완료", bg: COLORS.okSoft, fg: COLORS.ok };
+    return { label: "변환 대기", bg: C.goldSoft, fg: C.goldDeep };
+  return { label: "완료", bg: C.sageSoft, fg: C.sageDeep };
+}
+
+function Wordmark() {
+  return (
+    <Text style={styles.brand}>
+      취재수첩<Text style={{ color: C.clay }}>.</Text>
+    </Text>
+  );
 }
 
 function LoginScreen() {
@@ -92,16 +90,14 @@ function LoginScreen() {
   return (
     <View style={styles.loginWrap}>
       <View style={styles.loginCard}>
-        <Text style={styles.brand}>
-          취재수첩<Text style={{ color: COLORS.rec }}>.</Text>
-        </Text>
+        <Wordmark />
         <Text style={styles.loginSub}>
           {mode === "login" ? "기자 계정으로 로그인하세요." : "새 계정을 만듭니다."}
         </Text>
         <TextInput
           style={styles.field}
           placeholder="이메일"
-          placeholderTextColor={COLORS.muted}
+          placeholderTextColor="#A7AC9B"
           autoCapitalize="none"
           keyboardType="email-address"
           value={email}
@@ -110,7 +106,7 @@ function LoginScreen() {
         <TextInput
           style={styles.field}
           placeholder="비밀번호 (6자 이상)"
-          placeholderTextColor={COLORS.muted}
+          placeholderTextColor="#A7AC9B"
           secureTextEntry
           value={password}
           onChangeText={setPassword}
@@ -142,7 +138,13 @@ function LoginScreen() {
   );
 }
 
-function HomeScreen({ session }: { session: Session }) {
+function HomeScreen({
+  session,
+  onOpenMenu,
+}: {
+  session: Session;
+  onOpenMenu: () => void;
+}) {
   const [notes, setNotes] = useState<NoteRow[]>([]);
   const [search, setSearch] = useState("");
   const [pending, setPending] = useState(0);
@@ -175,6 +177,28 @@ function HomeScreen({ session }: { session: Session }) {
     });
     return () => sub.remove();
   }, [sync]);
+
+  async function pickAudioFile() {
+    const res = await DocumentPicker.getDocumentAsync({
+      type: ["audio/*"],
+      copyToCacheDirectory: true,
+    });
+    if (res.canceled || !res.assets?.[0]) return;
+    const asset = res.assets[0];
+    try {
+      // 로컬 보존 → 업로드 → STT (녹음과 동일 파이프라인)
+      await enqueueFile(asset.uri, asset.name);
+      const remaining = await sync();
+      Alert.alert(
+        "파일 등록됨",
+        remaining === 0
+          ? "업로드가 끝났고 텍스트 변환이 시작됩니다."
+          : "폰에 보관됐습니다. 네트워크가 연결되면 자동으로 업로드합니다."
+      );
+    } catch (e) {
+      Alert.alert("업로드 불가", e instanceof Error ? e.message : String(e));
+    }
+  }
 
   function confirmDelete(note: NoteRow) {
     Alert.alert(
@@ -211,37 +235,13 @@ function HomeScreen({ session }: { session: Session }) {
   return (
     <View style={styles.home}>
       <View style={styles.homeHeader}>
-        <Text style={styles.brand}>
-          취재수첩<Text style={{ color: COLORS.rec }}>.</Text>
-        </Text>
-        <Pressable onPress={() => supabase.auth.signOut()}>
-          <Text style={styles.link}>로그아웃</Text>
+        <Wordmark />
+        <Pressable onPress={onOpenMenu} hitSlop={8}>
+          <View style={styles.avatarBtn}>
+            <Text style={{ fontSize: 15 }}>👤</Text>
+          </View>
         </Pressable>
       </View>
-
-      <RecordScreen onSaved={sync} />
-
-      {pending > 0 && (
-        <Pressable
-          style={styles.pendingBanner}
-          onPress={sync}
-          disabled={syncing}
-        >
-          <Text style={styles.pendingText}>
-            {syncing
-              ? "업로드 재시도 중…"
-              : `업로드 대기 ${pending}건 — 탭해서 다시 시도`}
-          </Text>
-        </Pressable>
-      )}
-
-      <TextInput
-        style={styles.search}
-        placeholder="제목 검색"
-        placeholderTextColor={COLORS.muted}
-        value={search}
-        onChangeText={setSearch}
-      />
 
       <FlatList
         data={filtered}
@@ -249,11 +249,41 @@ function HomeScreen({ session }: { session: Session }) {
         onRefresh={sync}
         refreshing={false}
         contentContainerStyle={{ paddingBottom: 24 }}
+        ListHeaderComponent={
+          <View>
+            <RecordField onSaved={sync} />
+            <Pressable style={styles.uploadRow} onPress={pickAudioFile}>
+              <Text style={styles.uploadText}>
+                🎧 음성 파일 업로드 <Text style={{ color: C.inkSoft }}>(통화녹음 등 · mp3, m4a)</Text>
+              </Text>
+            </Pressable>
+            {pending > 0 && (
+              <Pressable
+                style={styles.pendingBanner}
+                onPress={sync}
+                disabled={syncing}
+              >
+                <Text style={styles.pendingText}>
+                  {syncing
+                    ? "업로드 재시도 중…"
+                    : `업로드 대기 ${pending}건 — 탭해서 다시 시도 (파일은 폰에 안전하게 보관 중)`}
+                </Text>
+              </Pressable>
+            )}
+            <TextInput
+              style={styles.search}
+              placeholder="제목·메모 검색"
+              placeholderTextColor="#A7AC9B"
+              value={search}
+              onChangeText={setSearch}
+            />
+          </View>
+        }
         ListEmptyComponent={
           <Text style={styles.empty}>
             {q
               ? "검색 결과가 없습니다."
-              : "아직 기록이 없습니다.\n위 버튼으로 첫 녹음을 시작하세요."}
+              : "아직 기록이 없습니다.\n논밭을 탭해 첫 녹음을 시작하세요."}
           </Text>
         }
         renderItem={({ item }) => {
@@ -279,6 +309,11 @@ function HomeScreen({ session }: { session: Session }) {
               <Text style={styles.noteMeta}>
                 {new Date(item.updated_at).toLocaleString("ko-KR")}
               </Text>
+              {item.memo ? (
+                <Text style={styles.noteMemo} numberOfLines={1}>
+                  ✎ {item.memo}
+                </Text>
+              ) : null}
             </Pressable>
           );
         }}
@@ -291,6 +326,8 @@ function HomeScreen({ session }: { session: Session }) {
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [ready, setReady] = useState(false);
+  const [screen, setScreen] = useState<Screen>("home");
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -299,23 +336,47 @@ export default function App() {
     });
     const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
       setSession(s);
+      if (!s) setScreen("home");
     });
     return () => sub.subscription.unsubscribe();
   }, []);
 
+  function handleMenu(target: MenuTarget) {
+    if (target === "logout") {
+      supabase.auth.signOut();
+      return;
+    }
+    setScreen(target);
+  }
+
   return (
     <SafeAreaProvider>
       {/* edges에 bottom 포함 — 독립 APK는 edge-to-edge라 하단 내비게이션바 영역도 피해야 한다 */}
-      <SafeAreaView style={styles.container} edges={["top", "bottom", "left", "right"]}>
-        <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
+      <SafeAreaView
+        style={styles.container}
+        edges={["top", "bottom", "left", "right"]}
+      >
+        <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
         {!ready ? (
           <View style={styles.center}>
             <ActivityIndicator />
           </View>
-        ) : session ? (
-          <HomeScreen session={session} />
-        ) : (
+        ) : !session ? (
           <LoginScreen />
+        ) : screen === "settings" ? (
+          <SettingsScreen session={session} onBack={() => setScreen("home")} />
+        ) : screen === "sources" ? (
+          <SourcesScreen onBack={() => setScreen("home")} />
+        ) : (
+          <HomeScreen session={session} onOpenMenu={() => setMenuOpen(true)} />
+        )}
+        {session && (
+          <SideMenu
+            visible={menuOpen}
+            email={session.user.email ?? ""}
+            onClose={() => setMenuOpen(false)}
+            onNavigate={handleMenu}
+          />
         )}
       </SafeAreaView>
     </SafeAreaProvider>
@@ -323,46 +384,46 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.bg },
+  container: { flex: 1, backgroundColor: C.bg },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
 
   brand: {
     fontSize: 20,
     fontWeight: "800",
     letterSpacing: -0.5,
-    color: COLORS.ink,
+    color: C.ink,
   },
-  link: { color: COLORS.accent, fontSize: 14 },
+  link: { color: C.skyDeep, fontSize: 14, textAlign: "center" },
 
   // 로그인
   loginWrap: { flex: 1, justifyContent: "center", padding: 24 },
   loginCard: {
-    backgroundColor: COLORS.card,
-    borderRadius: 16,
+    backgroundColor: C.surface,
+    borderRadius: 20,
     borderWidth: 1,
-    borderColor: COLORS.line,
+    borderColor: C.line,
     padding: 24,
     gap: 10,
   },
-  loginSub: { color: COLORS.muted, fontSize: 13, marginBottom: 4 },
+  loginSub: { color: C.inkSoft, fontSize: 13, marginBottom: 4 },
   field: {
     borderWidth: 1,
-    borderColor: COLORS.line,
-    borderRadius: 10,
+    borderColor: C.line,
+    borderRadius: 12,
     paddingHorizontal: 13,
     paddingVertical: 11,
     fontSize: 15,
-    color: COLORS.ink,
-    backgroundColor: COLORS.card,
+    color: C.ink,
+    backgroundColor: C.surface,
   },
-  formError: { color: COLORS.danger, fontSize: 13 },
+  formError: { color: C.clayDeep, fontSize: 13 },
   btn: {
-    backgroundColor: COLORS.ink,
-    borderRadius: 10,
+    backgroundColor: C.ink,
+    borderRadius: 12,
     paddingVertical: 13,
     alignItems: "center",
   },
-  btnText: { color: "#fff", fontSize: 15, fontWeight: "700" },
+  btnText: { color: "#fff", fontSize: 15, fontWeight: "800" },
 
   // 홈
   home: { flex: 1, paddingHorizontal: 20 },
@@ -372,26 +433,50 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingVertical: 12,
   },
-  pendingBanner: {
-    backgroundColor: COLORS.warnSoft,
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 12,
+  avatarBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: C.sageSoft,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  pendingText: { color: COLORS.warn, fontSize: 14, textAlign: "center" },
+  uploadRow: {
+    backgroundColor: C.surface,
+    borderWidth: 1,
+    borderColor: C.line,
+    borderRadius: 14,
+    paddingVertical: 12,
+    alignItems: "center",
+    marginTop: 12,
+  },
+  uploadText: { fontSize: 13.5, fontWeight: "700", color: C.ink },
+  pendingBanner: {
+    backgroundColor: C.goldSoft,
+    borderRadius: 12,
+    padding: 12,
+    marginTop: 10,
+  },
+  pendingText: {
+    color: C.goldDeep,
+    fontSize: 13,
+    textAlign: "center",
+    lineHeight: 19,
+  },
   search: {
     borderWidth: 1,
-    borderColor: COLORS.line,
-    borderRadius: 10,
+    borderColor: C.line,
+    borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 10,
     fontSize: 14,
-    color: COLORS.ink,
-    backgroundColor: COLORS.card,
+    color: C.ink,
+    backgroundColor: C.surface,
+    marginTop: 12,
     marginBottom: 12,
   },
   empty: {
-    color: COLORS.muted,
+    color: C.inkSoft,
     textAlign: "center",
     paddingVertical: 40,
     lineHeight: 22,
@@ -399,10 +484,10 @@ const styles = StyleSheet.create({
 
   // 노트 카드
   noteCard: {
-    backgroundColor: COLORS.card,
+    backgroundColor: C.surface,
     borderWidth: 1,
-    borderColor: COLORS.line,
-    borderRadius: 12,
+    borderColor: C.line,
+    borderRadius: 16,
     padding: 14,
     marginBottom: 10,
   },
@@ -415,10 +500,11 @@ const styles = StyleSheet.create({
   noteTitle: {
     fontSize: 15,
     fontWeight: "700",
-    color: COLORS.ink,
+    color: C.ink,
     flex: 1,
   },
-  noteMeta: { fontSize: 12, color: COLORS.muted, marginTop: 3 },
+  noteMeta: { fontSize: 12, color: C.inkSoft, marginTop: 3 },
+  noteMemo: { fontSize: 12.5, color: C.sageDeep, marginTop: 6 },
   chip: {
     borderRadius: 999,
     paddingHorizontal: 9,
@@ -426,7 +512,7 @@ const styles = StyleSheet.create({
   },
   chipText: { fontSize: 11, fontWeight: "700" },
   hint: {
-    color: COLORS.muted,
+    color: C.inkSoft,
     fontSize: 11,
     textAlign: "center",
     paddingVertical: 8,
