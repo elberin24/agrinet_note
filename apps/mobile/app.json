@@ -20,12 +20,17 @@
       "permissions": [
         "RECORD_AUDIO",
         "FOREGROUND_SERVICE",
-        "FOREGROUND_SERVICE_MICROPHONE"
+        "FOREGROUND_SERVICE_MICROPHONE",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
       ]
     },
     "extra": {
       "supabaseUrl": "https://dbijwoooltszomachtmn.supabase.co",
-      "supabaseAnonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRiaWp3b29vbHRzem9tYWNodG1uIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQzMjI0MDEsImV4cCI6MjA5OTg5ODQwMX0.iA0UDUXXbtWauRwUIiTsUs3Sohbg5_E6XKUbORhfQRY"
+      "supabaseAnonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRiaWp3b29vbHRzem9tYWNodG1uIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQzMjI0MDEsImV4cCI6MjA5OTg5ODQwMX0.iA0UDUXXbtWauRwUIiTsUs3Sohbg5_E6XKUbORhfQRY",
+      "eas": {
+        "projectId": "8b3b22e8-0705-46a8-8fd4-4548e0803d1a"
+      }
     },
     "plugins": [
       "expo-audio"
