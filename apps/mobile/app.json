@@ -2,9 +2,10 @@
   "expo": {
     "name": "취재수첩",
     "slug": "chwijae-sucheop",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
+    "icon": "./assets/icon.png",
     "ios": {
       "bundleIdentifier": "kr.co.agrinet.chwijae",
       "supportsTablet": false,
@@ -17,6 +18,10 @@
     },
     "android": {
       "package": "kr.co.agrinet.chwijae",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1a1c20"
+      },
       "permissions": [
         "RECORD_AUDIO",
         "FOREGROUND_SERVICE",

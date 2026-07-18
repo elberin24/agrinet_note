@@ -5,13 +5,16 @@ import {
   AppState,
   FlatList,
   Pressable,
-  SafeAreaView,
   StatusBar,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from "react-native";
+import {
+  SafeAreaProvider,
+  SafeAreaView,
+} from "react-native-safe-area-context";
 import type { Session } from "@supabase/supabase-js";
 import type { Note, RecordingStatus } from "@chwijae/core";
 import { supabase } from "./lib/supabase";
@@ -301,18 +304,21 @@ export default function App() {
   }, []);
 
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
-      {!ready ? (
-        <View style={styles.center}>
-          <ActivityIndicator />
-        </View>
-      ) : session ? (
-        <HomeScreen session={session} />
-      ) : (
-        <LoginScreen />
-      )}
-    </SafeAreaView>
+    <SafeAreaProvider>
+      {/* edges에 bottom 포함 — 독립 APK는 edge-to-edge라 하단 내비게이션바 영역도 피해야 한다 */}
+      <SafeAreaView style={styles.container} edges={["top", "bottom", "left", "right"]}>
+        <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
+        {!ready ? (
+          <View style={styles.center}>
+            <ActivityIndicator />
+          </View>
+        ) : session ? (
+          <HomeScreen session={session} />
+        ) : (
+          <LoginScreen />
+        )}
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 
