@@ -1,0 +1,27 @@
+{
+  "name": "@chwijae/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios"
+  },
+  "dependencies": {
+    "@chwijae/core": "*",
+    "@react-native-async-storage/async-storage": "^2.1.0",
+    "base64-arraybuffer": "^1.0.2",
+    "expo": "~54.0.0",
+    "expo-audio": "~1.1.1",
+    "expo-constants": "~18.0.0",
+    "expo-file-system": "~19.0.23",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-url-polyfill": "^2.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "~19.1.0",
+    "typescript": "^5.5.0"
+  }
+}

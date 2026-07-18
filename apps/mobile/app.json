@@ -1,0 +1,34 @@
+{
+  "expo": {
+    "name": "취재수첩",
+    "slug": "chwijae-sucheop",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "bundleIdentifier": "kr.co.agrinet.chwijae",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "취재 녹음을 위해 마이크 접근 권한이 필요합니다.",
+        "UIBackgroundModes": [
+          "audio"
+        ]
+      }
+    },
+    "android": {
+      "package": "kr.co.agrinet.chwijae",
+      "permissions": [
+        "RECORD_AUDIO",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_MICROPHONE"
+      ]
+    },
+    "extra": {
+      "supabaseUrl": "https://dbijwoooltszomachtmn.supabase.co",
+      "supabaseAnonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRiaWp3b29vbHRzem9tYWNodG1uIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQzMjI0MDEsImV4cCI6MjA5OTg5ODQwMX0.iA0UDUXXbtWauRwUIiTsUs3Sohbg5_E6XKUbORhfQRY"
+    },
+    "plugins": [
+      "expo-audio"
+    ]
+  }
+}
