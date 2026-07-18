@@ -10,7 +10,7 @@ import {
 } from "react-native";
 import { C } from "../theme";
 
-export type MenuTarget = "home" | "sources" | "settings" | "logout";
+export type MenuTarget = "home" | "memos" | "sources" | "settings" | "logout";
 
 const PANEL_W = 264;
 
@@ -38,6 +38,7 @@ export function SideMenu({
 
   const items: { key: MenuTarget; icon: string; label: string }[] = [
     { key: "home", icon: "🌾", label: "취재수첩" },
+    { key: "memos", icon: "📝", label: "메모" },
     { key: "sources", icon: "👥", label: "취재원 정보" },
     { key: "settings", icon: "⚙️", label: "설정" },
   ];

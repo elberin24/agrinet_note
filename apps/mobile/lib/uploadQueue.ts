@@ -106,16 +106,20 @@ async function syncItem(
         `취재 ${new Date(item.recordedAt).toLocaleString("ko-KR")}`;
       const { data, error } = await supabase
         .from("notes")
-        .insert({
-          user_id: userId,
-          title,
-          memo: item.memo ?? "",
-          status: "active",
-        })
+        .insert({ user_id: userId, title, status: "active" })
         .select()
         .single();
       if (error) throw error;
       item.noteId = data.id;
+      // 녹음 중 작성한 메모는 memos 테이블에 이 노트로 태그해 저장
+      if (item.memo) {
+        await supabase.from("memos").insert({
+          user_id: userId,
+          body: item.memo,
+          note_id: item.noteId,
+        });
+        item.memo = undefined;
+      }
     }
 
     if (!item.recordingId) {

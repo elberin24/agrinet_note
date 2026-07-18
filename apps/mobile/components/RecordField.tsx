@@ -20,6 +20,7 @@ import {
   useAudioRecorderState,
 } from "expo-audio";
 import { C } from "../theme";
+import { supabase } from "../lib/supabase";
 import { enqueueRecording } from "../lib/uploadQueue";
 import {
   DEFAULT_GESTURES,
@@ -82,8 +83,10 @@ const t = StyleSheet.create({
 });
 
 export function RecordField({
+  userId,
   onSaved,
 }: {
+  userId: string;
   // 녹음이 로컬 큐에 들어간 뒤 호출. 반환값: 동기화 후 남은(실패한) 항목 수.
   onSaved: () => Promise<number>;
 }) {
@@ -217,8 +220,23 @@ export function RecordField({
 
   const memoLabel =
     state === "idle"
-      ? "✎ 녹음 전 메모 — 적어두면 다음 녹음에 자동으로 연결돼요"
-      : "✎ 메모 — 지금 이 녹음에 함께 저장됩니다";
+      ? "✎ 메모"
+      : "✎ 메모 — 녹음이 끝나면 이 녹음에 연결됩니다";
+
+  // 녹음 전(대기 중) 메모는 태그 없이 독립 저장
+  async function saveStandaloneMemo() {
+    const body = memo.trim();
+    if (!body) return;
+    const { error } = await supabase
+      .from("memos")
+      .insert({ user_id: userId, body });
+    if (error) {
+      Alert.alert("저장 실패", error.message);
+    } else {
+      setMemo("");
+      Alert.alert("메모 저장됨", "사이드 메뉴 > 메모에서 확인할 수 있습니다.");
+    }
+  }
 
   return (
     <View>
@@ -305,6 +323,11 @@ export function RecordField({
           value={memo}
           onChangeText={setMemo}
         />
+        {state === "idle" && memo.trim().length > 0 && (
+          <Pressable style={s.memoSaveBtn} onPress={saveStandaloneMemo}>
+            <Text style={s.memoSaveText}>메모만 저장</Text>
+          </Pressable>
+        )}
       </View>
     </View>
   );
@@ -376,4 +399,9 @@ const s = StyleSheet.create({
     fontSize: 13.5, color: C.ink, lineHeight: 20, minHeight: 40,
     textAlignVertical: "top", padding: 0,
   },
+  memoSaveBtn: {
+    alignSelf: "flex-end", backgroundColor: C.sageDeep, borderRadius: 999,
+    paddingHorizontal: 16, paddingVertical: 6, marginTop: 8,
+  },
+  memoSaveText: { color: "#fff", fontSize: 12.5, fontWeight: "800" },
 });

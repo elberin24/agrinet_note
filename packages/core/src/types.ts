@@ -49,12 +49,34 @@ export interface TranscriptWord {
   end: number;
 }
 
+// 화자 분리 세그먼트 (speaker는 "1","2"… 정규화된 라벨)
+export interface SpeakerSegment {
+  speaker: string;
+  text: string;
+  start?: number;
+  end?: number;
+}
+
 export interface Transcript {
   id: string;
   recording_id: string;
   raw_text: string | null;
   edited_text: string | null;
   words: TranscriptWord[] | null;
+  diarized: SpeakerSegment[] | null;
+  refined: SpeakerSegment[] | null;
+  summary: string | null;
+  speaker_names: Record<string, string> | null;
   stt_engine: string;
   created_at: string;
+}
+
+export interface Memo {
+  id: string;
+  user_id: string;
+  body: string;
+  note_id: string | null;
+  source_ref: string | null;
+  created_at: string;
+  updated_at: string;
 }

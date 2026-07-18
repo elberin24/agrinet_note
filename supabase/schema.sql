@@ -101,6 +101,10 @@ create table if not exists public.transcripts (
   raw_text text,
   edited_text text,
   words jsonb, -- whisper-1 단어별 타임스탬프 [{word, start, end}] — 재생-텍스트 동기화용
+  diarized jsonb, -- 화자 분리 세그먼트 [{speaker, text, start, end}]
+  refined jsonb, -- AI가 다듬은 버전 [{speaker, text}]
+  summary text, -- 목록용 한줄 요약
+  speaker_names jsonb not null default '{}'::jsonb, -- {"1": "김과장"} 사용자 지정 화자 이름
   stt_engine text not null default 'whisper',
   created_at timestamptz not null default now()
 );
@@ -154,5 +158,31 @@ create policy "storage_recordings_own"
   on storage.objects for all
   using (bucket_id = 'recordings' and auth.uid()::text = (storage.foldername(name))[1])
   with check (bucket_id = 'recordings' and auth.uid()::text = (storage.foldername(name))[1]);
+
+-- 6. memos: 독립 메모 (녹음 전 메모는 태그 없이, 녹음 중 메모는 note에 연결)
+create table if not exists public.memos (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  body text not null default '',
+  note_id uuid references public.notes (id) on delete set null, -- 연결된 녹음 노트 (없으면 독립 메모)
+  source_ref text, -- 취재원 연결 자리 — sources 테이블 생성 후 FK로 교체 예정
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.memos enable row level security;
+
+create policy "memos_all_own"
+  on public.memos for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+create index if not exists memos_user_id_idx on public.memos (user_id);
+create index if not exists memos_note_id_idx on public.memos (note_id);
+
+drop trigger if exists memos_set_updated_at on public.memos;
+create trigger memos_set_updated_at
+  before update on public.memos
+  for each row execute function public.set_updated_at();
 
 -- Phase 2 예정 (지금은 생성하지 않음): sources, note_sources

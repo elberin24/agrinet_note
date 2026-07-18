@@ -25,12 +25,19 @@ import { RecordField } from "./components/RecordField";
 import { SideMenu, type MenuTarget } from "./components/SideMenu";
 import { SettingsScreen } from "./screens/SettingsScreen";
 import { SourcesScreen } from "./screens/SourcesScreen";
+import { MemosScreen } from "./screens/MemosScreen";
+import { NoteDetailScreen } from "./screens/NoteDetailScreen";
 
 type NoteRow = Note & {
-  recordings: { id: string; storage_path: string; status: RecordingStatus }[];
+  recordings: {
+    id: string;
+    storage_path: string;
+    status: RecordingStatus;
+    transcripts: { summary: string | null; raw_text: string | null }[];
+  }[];
 };
 
-type Screen = "home" | "settings" | "sources";
+type Screen = "home" | "settings" | "sources" | "memos";
 
 function errorMessage(message: string): string {
   if (message.includes("Invalid login credentials"))
@@ -138,12 +145,27 @@ function LoginScreen() {
   );
 }
 
+// 목록 카드 미리보기: AI 요약 우선, 없으면 원문 앞부분
+function notePreview(n: NoteRow): string | null {
+  for (const r of n.recordings) {
+    const t = r.transcripts?.[0];
+    if (t?.summary) return t.summary;
+    if (t?.raw_text) {
+      const snip = t.raw_text.slice(0, 60);
+      return t.raw_text.length > 60 ? `${snip}…` : snip;
+    }
+  }
+  return null;
+}
+
 function HomeScreen({
   session,
   onOpenMenu,
+  onOpenNote,
 }: {
   session: Session;
   onOpenMenu: () => void;
+  onOpenNote: (noteId: string) => void;
 }) {
   const [notes, setNotes] = useState<NoteRow[]>([]);
   const [search, setSearch] = useState("");
@@ -162,7 +184,7 @@ function HomeScreen({
     }
     const { data, error } = await supabase
       .from("notes")
-      .select("*, recordings(id, storage_path, status)")
+      .select("*, recordings(id, storage_path, status, transcripts(summary, raw_text))")
       .order("updated_at", { ascending: false })
       .limit(50);
     if (!error && data) setNotes(data as NoteRow[]);
@@ -251,7 +273,7 @@ function HomeScreen({
         contentContainerStyle={{ paddingBottom: 24 }}
         ListHeaderComponent={
           <View>
-            <RecordField onSaved={sync} />
+            <RecordField userId={session.user.id} onSaved={sync} />
             <Pressable style={styles.uploadRow} onPress={pickAudioFile}>
               <Text style={styles.uploadText}>
                 🎧 음성 파일 업로드 <Text style={{ color: C.inkSoft }}>(통화녹음 등 · mp3, m4a)</Text>
@@ -288,9 +310,11 @@ function HomeScreen({
         }
         renderItem={({ item }) => {
           const status = noteStatus(item);
+          const preview = notePreview(item);
           return (
             <Pressable
               style={styles.noteCard}
+              onPress={() => onOpenNote(item.id)}
               onLongPress={() => confirmDelete(item)}
               delayLongPress={500}
             >
@@ -309,11 +333,11 @@ function HomeScreen({
               <Text style={styles.noteMeta}>
                 {new Date(item.updated_at).toLocaleString("ko-KR")}
               </Text>
-              {item.memo ? (
-                <Text style={styles.noteMemo} numberOfLines={1}>
-                  ✎ {item.memo}
+              {preview && (
+                <Text style={styles.notePreview} numberOfLines={2}>
+                  {preview}
                 </Text>
-              ) : null}
+              )}
             </Pressable>
           );
         }}
@@ -327,6 +351,7 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [ready, setReady] = useState(false);
   const [screen, setScreen] = useState<Screen>("home");
+  const [detailNoteId, setDetailNoteId] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
@@ -363,12 +388,26 @@ export default function App() {
           </View>
         ) : !session ? (
           <LoginScreen />
+        ) : detailNoteId ? (
+          <NoteDetailScreen
+            noteId={detailNoteId}
+            onBack={() => setDetailNoteId(null)}
+          />
         ) : screen === "settings" ? (
           <SettingsScreen session={session} onBack={() => setScreen("home")} />
         ) : screen === "sources" ? (
           <SourcesScreen onBack={() => setScreen("home")} />
+        ) : screen === "memos" ? (
+          <MemosScreen
+            userId={session.user.id}
+            onBack={() => setScreen("home")}
+          />
         ) : (
-          <HomeScreen session={session} onOpenMenu={() => setMenuOpen(true)} />
+          <HomeScreen
+            session={session}
+            onOpenMenu={() => setMenuOpen(true)}
+            onOpenNote={setDetailNoteId}
+          />
         )}
         {session && (
           <SideMenu
@@ -504,7 +543,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   noteMeta: { fontSize: 12, color: C.inkSoft, marginTop: 3 },
-  noteMemo: { fontSize: 12.5, color: C.sageDeep, marginTop: 6 },
+  notePreview: { fontSize: 12.5, color: C.inkSoft, marginTop: 6, lineHeight: 18 },
   chip: {
     borderRadius: 999,
     paddingHorizontal: 9,
