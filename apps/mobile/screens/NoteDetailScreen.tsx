@@ -1,10 +1,10 @@
-// 녹음 카드 상세 — 재생, 다듬은 버전/원문 탭, 화자 이름 수정,
+// 녹음 카드 상세 — 재생(단어 동기화), 다듬은 버전/원문 탭, 화자 이름 수정,
+// 제목 수정, 자유 태그(분야/장소/취재원 등),
 // 플로팅 메뉴(내보내기 PDF/TXT/MD, 질문하기)
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  FlatList,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -22,6 +22,7 @@ import * as Print from "expo-print";
 import type {
   Memo,
   Note,
+  NoteTag,
   Recording,
   SpeakerSegment,
   Transcript,
@@ -32,6 +33,8 @@ import { supabase } from "../lib/supabase";
 type NoteFull = Note & {
   recordings: (Recording & { transcripts: Transcript[] })[];
 };
+
+const TAG_SUGGESTIONS = ["분야", "장소", "취재원"];
 
 function fmtTime(sec: number): string {
   if (!isFinite(sec) || sec < 0) sec = 0;
@@ -44,10 +47,45 @@ function speakerLabel(names: Record<string, string>, speaker: string): string {
   return names[speaker] ?? `화자 ${speaker}`;
 }
 
-function Player({ url }: { url: string }) {
+function Player({
+  url,
+  initialSeek,
+  onTime,
+  seekRef,
+}: {
+  url: string;
+  initialSeek: number | null;
+  onTime: (sec: number) => void;
+  seekRef: React.MutableRefObject<((sec: number) => void) | null>;
+}) {
   const player = useAudioPlayer(url);
   const status = useAudioPlayerStatus(player);
+  const [trackW, setTrackW] = useState(200);
   const playing = status.playing;
+
+  useEffect(() => {
+    seekRef.current = (sec: number) => {
+      player.seekTo(sec);
+      player.play();
+    };
+    if (initialSeek != null) {
+      player.seekTo(initialSeek);
+      player.play();
+    }
+    return () => {
+      seekRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [player]);
+
+  // 단어 하이라이트용 — 과도한 리렌더를 막기 위해 0.25초 단위로만 전달
+  const lastSent = useRef(0);
+  useEffect(() => {
+    if (Math.abs(status.currentTime - lastSent.current) >= 0.25) {
+      lastSent.current = status.currentTime;
+      onTime(status.currentTime);
+    }
+  }, [status.currentTime, onTime]);
 
   return (
     <View style={s.player}>
@@ -59,14 +97,14 @@ function Player({ url }: { url: string }) {
       </Pressable>
       <Pressable
         style={s.track}
+        onLayout={(e) => setTrackW(e.nativeEvent.layout.width)}
         onPress={(e) => {
-          const { locationX } = e.nativeEvent;
-          // 트랙 탭 위치 비율로 탐색
           if (status.duration > 0) {
-            player.seekTo((locationX / trackWidth) * status.duration);
+            player.seekTo(
+              (e.nativeEvent.locationX / trackW) * status.duration
+            );
           }
         }}
-        onLayout={(e) => { trackWidth = e.nativeEvent.layout.width; }}
       >
         <View
           style={[
@@ -83,7 +121,6 @@ function Player({ url }: { url: string }) {
     </View>
   );
 }
-let trackWidth = 200;
 
 export function NoteDetailScreen({
   noteId,
@@ -96,12 +133,21 @@ export function NoteDetailScreen({
   const [memos, setMemos] = useState<Memo[]>([]);
   const [tab, setTab] = useState<"refined" | "raw">("refined");
   const [playUrl, setPlayUrl] = useState<string | null>(null);
+  const [pendingSeek, setPendingSeek] = useState<number | null>(null);
+  const [currentTime, setCurrentTime] = useState(-1);
+  const seekRef = useRef<((sec: number) => void) | null>(null);
   const [fabOpen, setFabOpen] = useState(false);
   const [askOpen, setAskOpen] = useState(false);
   const [question, setQuestion] = useState("");
   const [asking, setAsking] = useState(false);
   const [qa, setQa] = useState<{ q: string; a: string }[]>([]);
   const [renaming, setRenaming] = useState<{ speaker: string; value: string } | null>(null);
+  const [editingTitle, setEditingTitle] = useState<string | null>(null);
+  const [tagEdit, setTagEdit] = useState<{
+    index: number; // -1이면 새 태그
+    name: string;
+    value: string;
+  } | null>(null);
 
   const load = useCallback(async () => {
     const { data } = await supabase
@@ -128,9 +174,14 @@ export function NoteDetailScreen({
   const refined = t?.refined ?? null;
   const hasRefined = Array.isArray(refined) && refined.length > 0;
   const activeTab = hasRefined ? tab : "raw";
+  const tags: NoteTag[] = note?.tags ?? [];
 
-  async function play() {
+  async function openPlayer(seekSec: number | null) {
     if (!rec?.storage_path) return;
+    if (playUrl) {
+      if (seekSec != null) seekRef.current?.(seekSec);
+      return;
+    }
     const { data, error } = await supabase.storage
       .from("recordings")
       .createSignedUrl(rec.storage_path, 3600);
@@ -138,7 +189,43 @@ export function NoteDetailScreen({
       Alert.alert("재생 실패", error?.message ?? "URL 발급 실패");
       return;
     }
+    setPendingSeek(seekSec);
     setPlayUrl(data.signedUrl);
+  }
+
+  async function saveTitle() {
+    if (editingTitle == null || !note) return;
+    const title = editingTitle.trim();
+    if (title && title !== note.title) {
+      await supabase.from("notes").update({ title }).eq("id", note.id);
+    }
+    setEditingTitle(null);
+    load();
+  }
+
+  async function saveTags(next: NoteTag[]) {
+    if (!note) return;
+    await supabase.from("notes").update({ tags: next }).eq("id", note.id);
+    load();
+  }
+
+  function applyTagEdit(remove = false) {
+    if (!tagEdit || !note) return;
+    const next = [...tags];
+    if (remove) {
+      if (tagEdit.index >= 0) next.splice(tagEdit.index, 1);
+    } else {
+      const name = tagEdit.name.trim();
+      const value = tagEdit.value.trim();
+      if (!name || !value) {
+        Alert.alert("확인", "태그 이름과 값을 모두 입력해 주세요.");
+        return;
+      }
+      if (tagEdit.index >= 0) next[tagEdit.index] = { name, value };
+      else next.push({ name, value });
+    }
+    setTagEdit(null);
+    saveTags(next);
   }
 
   async function saveSpeakerName() {
@@ -241,7 +328,13 @@ export function NoteDetailScreen({
         <Pressable onPress={onBack} hitSlop={12}>
           <Text style={s.back}>‹</Text>
         </Pressable>
-        <Text style={s.headerTitle} numberOfLines={1}>{note.title}</Text>
+        <Pressable
+          style={{ flex: 1 }}
+          onPress={() => setEditingTitle(note.title)}
+        >
+          <Text style={s.headerTitle} numberOfLines={1}>{note.title}</Text>
+          <Text style={s.headerHint}>제목을 탭하면 수정</Text>
+        </Pressable>
         <View style={{ width: 24 }} />
       </View>
 
@@ -250,6 +343,29 @@ export function NoteDetailScreen({
           {new Date(note.updated_at).toLocaleString("ko-KR")}
           {rec?.duration_sec != null ? ` · ${fmtTime(rec.duration_sec)}` : ""}
         </Text>
+
+        {/* 태그 */}
+        <View style={s.tagsRow}>
+          {tags.map((tg, i) => (
+            <Pressable
+              key={`${tg.name}-${i}`}
+              style={s.tagChip}
+              onPress={() =>
+                setTagEdit({ index: i, name: tg.name, value: tg.value })
+              }
+            >
+              <Text style={s.tagChipText}>
+                {tg.name} · {tg.value}
+              </Text>
+            </Pressable>
+          ))}
+          <Pressable
+            style={[s.tagChip, s.tagChipAdd]}
+            onPress={() => setTagEdit({ index: -1, name: "", value: "" })}
+          >
+            <Text style={[s.tagChipText, { color: C.inkSoft }]}>+ 태그</Text>
+          </Pressable>
+        </View>
 
         {memos.length > 0 && (
           <View style={s.memoCard}>
@@ -262,9 +378,14 @@ export function NoteDetailScreen({
 
         {rec?.storage_path ? (
           playUrl ? (
-            <Player url={playUrl} />
+            <Player
+              url={playUrl}
+              initialSeek={pendingSeek}
+              onTime={setCurrentTime}
+              seekRef={seekRef}
+            />
           ) : (
-            <Pressable style={s.playRow} onPress={play}>
+            <Pressable style={s.playRow} onPress={() => openPlayer(null)}>
               <Text style={s.playRowText}>▶ 녹음 재생</Text>
             </Pressable>
           )
@@ -285,7 +406,7 @@ export function NoteDetailScreen({
               onPress={() => setTab("raw")}
             >
               <Text style={[s.tabText, activeTab === "raw" && s.tabTextOn]}>
-                원문
+                원문 (재생 동기화)
               </Text>
             </Pressable>
           </View>
@@ -313,9 +434,30 @@ export function NoteDetailScreen({
             ))}
             <Text style={s.hint}>화자 이름을 탭하면 수정할 수 있습니다</Text>
           </View>
+        ) : t?.edited_text != null ? (
+          <Text style={s.rawText}>{t.edited_text}</Text>
+        ) : t?.words && t.words.length > 0 ? (
+          // PC와 동일한 단어 동기화: 재생 위치의 단어를 강조, 단어 탭 → 해당 시점 재생
+          <View>
+            <Text style={s.rawText}>
+              {t.words.map((w, i) => {
+                const active = currentTime >= w.start && currentTime < w.end;
+                return (
+                  <Text
+                    key={i}
+                    onPress={() => openPlayer(w.start)}
+                    style={active ? s.wordOn : undefined}
+                  >
+                    {w.word}{" "}
+                  </Text>
+                );
+              })}
+            </Text>
+            <Text style={s.hint}>단어를 탭하면 그 시점부터 재생됩니다</Text>
+          </View>
         ) : (
           <Text style={s.rawText}>
-            {t?.edited_text ?? t?.raw_text ?? "아직 변환된 텍스트가 없습니다."}
+            {t?.raw_text ?? "아직 변환된 텍스트가 없습니다."}
           </Text>
         )}
 
@@ -386,6 +528,109 @@ export function NoteDetailScreen({
         </KeyboardAvoidingView>
       )}
 
+      {/* 제목 수정 모달 */}
+      <Modal visible={editingTitle != null} transparent animationType="fade">
+        <View style={s.modalBack}>
+          <View style={s.modalCard}>
+            <Text style={s.modalTitle}>제목 수정</Text>
+            <TextInput
+              style={s.modalInput}
+              value={editingTitle ?? ""}
+              onChangeText={setEditingTitle}
+              autoFocus
+            />
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <Pressable
+                style={[s.modalBtn, { backgroundColor: C.surface2 }]}
+                onPress={() => setEditingTitle(null)}
+              >
+                <Text style={{ color: C.ink, fontWeight: "700" }}>취소</Text>
+              </Pressable>
+              <Pressable
+                style={[s.modalBtn, { backgroundColor: C.ink }]}
+                onPress={saveTitle}
+              >
+                <Text style={{ color: "#fff", fontWeight: "700" }}>저장</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* 태그 추가/수정 모달 */}
+      <Modal visible={!!tagEdit} transparent animationType="fade">
+        <View style={s.modalBack}>
+          <View style={s.modalCard}>
+            <Text style={s.modalTitle}>
+              {tagEdit?.index === -1 ? "태그 추가" : "태그 수정"}
+            </Text>
+            <View style={{ flexDirection: "row", gap: 6 }}>
+              {TAG_SUGGESTIONS.map((name) => (
+                <Pressable
+                  key={name}
+                  style={[
+                    s.suggestChip,
+                    tagEdit?.name === name && s.suggestChipOn,
+                  ]}
+                  onPress={() =>
+                    setTagEdit((te) => (te ? { ...te, name } : te))
+                  }
+                >
+                  <Text
+                    style={[
+                      s.suggestText,
+                      tagEdit?.name === name && { color: "#fff" },
+                    ]}
+                  >
+                    {name}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+            <TextInput
+              style={s.modalInput}
+              placeholder="태그 이름 (예: 분야, 장소, 취재원…)"
+              placeholderTextColor="#A7AC9B"
+              value={tagEdit?.name ?? ""}
+              onChangeText={(v) =>
+                setTagEdit((te) => (te ? { ...te, name: v } : te))
+              }
+            />
+            <TextInput
+              style={s.modalInput}
+              placeholder="값 (예: 축산, 세종청사, 김과장…)"
+              placeholderTextColor="#A7AC9B"
+              value={tagEdit?.value ?? ""}
+              onChangeText={(v) =>
+                setTagEdit((te) => (te ? { ...te, value: v } : te))
+              }
+            />
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              {tagEdit && tagEdit.index >= 0 && (
+                <Pressable
+                  style={[s.modalBtn, { backgroundColor: C.claySoft }]}
+                  onPress={() => applyTagEdit(true)}
+                >
+                  <Text style={{ color: C.clayDeep, fontWeight: "700" }}>삭제</Text>
+                </Pressable>
+              )}
+              <Pressable
+                style={[s.modalBtn, { backgroundColor: C.surface2 }]}
+                onPress={() => setTagEdit(null)}
+              >
+                <Text style={{ color: C.ink, fontWeight: "700" }}>취소</Text>
+              </Pressable>
+              <Pressable
+                style={[s.modalBtn, { backgroundColor: C.ink }]}
+                onPress={() => applyTagEdit(false)}
+              >
+                <Text style={{ color: "#fff", fontWeight: "700" }}>저장</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* 화자 이름 수정 모달 */}
       <Modal visible={!!renaming} transparent animationType="fade">
         <View style={s.modalBack}>
@@ -428,11 +673,25 @@ const s = StyleSheet.create({
   screen: { flex: 1, paddingHorizontal: 20 },
   header: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-    paddingVertical: 12, gap: 8,
+    paddingVertical: 10, gap: 8,
   },
   back: { fontSize: 30, color: C.ink, lineHeight: 32, width: 24 },
-  headerTitle: { flex: 1, fontSize: 16, fontWeight: "800", color: C.ink, textAlign: "center" },
-  meta: { fontSize: 12, color: C.inkSoft, marginBottom: 12 },
+  headerTitle: { fontSize: 16, fontWeight: "800", color: C.ink, textAlign: "center" },
+  headerHint: { fontSize: 10, color: C.inkSoft, textAlign: "center", marginTop: 1 },
+  meta: { fontSize: 12, color: C.inkSoft, marginBottom: 10 },
+
+  tagsRow: {
+    flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 12,
+  },
+  tagChip: {
+    backgroundColor: C.goldSoft, borderRadius: 999,
+    paddingHorizontal: 11, paddingVertical: 4,
+  },
+  tagChipAdd: {
+    backgroundColor: C.surface, borderWidth: 1, borderColor: C.line,
+    borderStyle: "dashed",
+  },
+  tagChipText: { fontSize: 12, fontWeight: "700", color: C.goldDeep },
 
   memoCard: {
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.line,
@@ -455,8 +714,7 @@ const s = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
   track: {
-    flex: 1, height: 6, borderRadius: 3, backgroundColor: "#DAD5C6",
-    overflow: "hidden", justifyContent: "center",
+    flex: 1, height: 18, justifyContent: "center",
   },
   trackFill: { height: 6, backgroundColor: C.sage, borderRadius: 3 },
   time: { fontSize: 11, color: C.inkSoft, fontVariant: ["tabular-nums"] },
@@ -480,8 +738,11 @@ const s = StyleSheet.create({
   },
   speakerText: { fontSize: 12, fontWeight: "800", color: C.sageDeep },
   segText: { fontSize: 14, color: C.ink, lineHeight: 22 },
-  rawText: { fontSize: 14, color: C.ink, lineHeight: 24 },
-  hint: { fontSize: 11.5, color: C.inkSoft, textAlign: "center", marginTop: 4 },
+  rawText: { fontSize: 14, color: C.ink, lineHeight: 26 },
+  wordOn: {
+    color: C.skyDeep, fontWeight: "800", backgroundColor: C.skySoft,
+  },
+  hint: { fontSize: 11.5, color: C.inkSoft, textAlign: "center", marginTop: 8 },
 
   qaCard: {
     backgroundColor: C.skySoft, borderRadius: 14, padding: 12, gap: 6,
@@ -536,4 +797,10 @@ const s = StyleSheet.create({
   modalBtn: {
     flex: 1, borderRadius: 10, paddingVertical: 11, alignItems: "center",
   },
+  suggestChip: {
+    backgroundColor: C.surface2, borderRadius: 999,
+    paddingHorizontal: 13, paddingVertical: 5,
+  },
+  suggestChipOn: { backgroundColor: C.sageDeep },
+  suggestText: { fontSize: 12.5, fontWeight: "700", color: C.ink },
 });

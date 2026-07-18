@@ -20,7 +20,15 @@ import type { Session } from "@supabase/supabase-js";
 import type { Note, RecordingStatus } from "@chwijae/core";
 import { C } from "./theme";
 import { supabase } from "./lib/supabase";
-import { enqueueFile, processQueue } from "./lib/uploadQueue";
+import {
+  cancelAndRemove,
+  enqueueFile,
+  loadQueue,
+  processQueue,
+  queueItemTitle,
+  retryItem,
+  type QueueItem,
+} from "./lib/uploadQueue";
 import { RecordField } from "./components/RecordField";
 import { SideMenu, type MenuTarget } from "./components/SideMenu";
 import { SettingsScreen } from "./screens/SettingsScreen";
@@ -169,18 +177,21 @@ function HomeScreen({
 }) {
   const [notes, setNotes] = useState<NoteRow[]>([]);
   const [search, setSearch] = useState("");
-  const [pending, setPending] = useState(0);
-  const [syncing, setSyncing] = useState(false);
+  const [queueItems, setQueueItems] = useState<QueueItem[]>([]);
+  const [progress, setProgress] = useState<Record<string, number>>({});
 
-  // 로컬 큐 업로드 시도 + 노트 목록 갱신. 남은 항목 수를 반환.
+  // 로컬 큐 업로드 시도(진행률 표시) + 노트 목록 갱신. 남은 항목 수를 반환.
   const sync = useCallback(async () => {
-    setSyncing(true);
     let remaining = 0;
     try {
-      remaining = await processQueue(session.user.id);
+      remaining = await processQueue(session.user.id, (id, pct) => {
+        setProgress((p) => ({ ...p, [id]: pct }));
+        // 진행률이 바뀔 때마다 큐 카드도 갱신
+        loadQueue().then(setQueueItems);
+      });
     } finally {
-      setPending(remaining);
-      setSyncing(false);
+      setQueueItems(await loadQueue());
+      setProgress({});
     }
     const { data, error } = await supabase
       .from("notes")
@@ -190,6 +201,48 @@ function HomeScreen({
     if (!error && data) setNotes(data as NoteRow[]);
     return remaining;
   }, [session.user.id]);
+
+  // 실패한 큐 항목 카드 탭 → 재업로드 여부 확인
+  function askRetry(item: QueueItem) {
+    Alert.alert(
+      "재업로드 하시겠습니까?",
+      `"${queueItemTitle(item)}"\n실패 사유: ${item.lastError ?? "알 수 없음"}`,
+      [
+        { text: "나중에", style: "cancel" },
+        {
+          text: "재업로드",
+          onPress: async () => {
+            await retryItem(item.id, session.user.id, (id, pct) => {
+              setProgress((p) => ({ ...p, [id]: pct }));
+            });
+            setProgress({});
+            sync();
+          },
+        },
+      ]
+    );
+  }
+
+  // 업로드 중 취소 / 실패 항목 삭제
+  function askCancelQueueItem(item: QueueItem, uploading: boolean) {
+    Alert.alert(
+      uploading ? "업로드 취소" : "항목 삭제",
+      uploading
+        ? "업로드를 취소할까요? 녹음 원본은 폰에 그대로 보관됩니다."
+        : "이 항목을 목록에서 삭제할까요? 녹음 원본은 폰에 그대로 보관됩니다.",
+      [
+        { text: "아니오", style: "cancel" },
+        {
+          text: uploading ? "업로드 취소" : "삭제",
+          style: "destructive",
+          onPress: async () => {
+            await cancelAndRemove(item.id);
+            sync();
+          },
+        },
+      ]
+    );
+  }
 
   useEffect(() => {
     sync();
@@ -275,23 +328,58 @@ function HomeScreen({
           <View>
             <RecordField userId={session.user.id} onSaved={sync} />
             <Pressable style={styles.uploadRow} onPress={pickAudioFile}>
-              <Text style={styles.uploadText}>
-                🎧 음성 파일 업로드 <Text style={{ color: C.inkSoft }}>(통화녹음 등 · mp3, m4a)</Text>
-              </Text>
+              <Text style={styles.uploadText}>🎧 음성 파일 업로드</Text>
+              <Text style={styles.uploadSub}>통화녹음 등 · mp3, m4a</Text>
             </Pressable>
-            {pending > 0 && (
-              <Pressable
-                style={styles.pendingBanner}
-                onPress={sync}
-                disabled={syncing}
-              >
-                <Text style={styles.pendingText}>
-                  {syncing
-                    ? "업로드 재시도 중…"
-                    : `업로드 대기 ${pending}건 — 탭해서 다시 시도 (파일은 폰에 안전하게 보관 중)`}
-                </Text>
-              </Pressable>
-            )}
+            {queueItems.map((item) => {
+              const pct = progress[item.id];
+              const uploading = pct != null && !item.lastError;
+              return (
+                <Pressable
+                  key={item.id}
+                  style={styles.noteCard}
+                  onPress={() =>
+                    item.lastError
+                      ? askRetry(item)
+                      : askCancelQueueItem(item, true)
+                  }
+                >
+                  <View style={styles.noteRow}>
+                    <Text style={styles.noteTitle} numberOfLines={1}>
+                      {queueItemTitle(item)}
+                    </Text>
+                    {item.lastError ? (
+                      <View style={[styles.chip, { backgroundColor: C.claySoft }]}>
+                        <Text style={[styles.chipText, { color: C.clayDeep }]}>
+                          업로드 실패
+                        </Text>
+                      </View>
+                    ) : (
+                      <View style={[styles.chip, { backgroundColor: C.skySoft }]}>
+                        <Text style={[styles.chipText, { color: C.skyDeep }]}>
+                          업로드 중 {Math.round((pct ?? 0) * 100)}%
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                  {uploading && (
+                    <View style={styles.progressTrack}>
+                      <View
+                        style={[
+                          styles.progressFill,
+                          { width: `${Math.round((pct ?? 0) * 100)}%` },
+                        ]}
+                      />
+                    </View>
+                  )}
+                  <Text style={styles.noteMeta}>
+                    {item.lastError
+                      ? "탭하면 재업로드 여부를 선택합니다 (원본은 폰에 보관 중)"
+                      : "탭하면 업로드를 취소할 수 있습니다"}
+                  </Text>
+                </Pressable>
+              );
+            })}
             <TextInput
               style={styles.search}
               placeholder="제목·메모 검색"
@@ -311,6 +399,7 @@ function HomeScreen({
         renderItem={({ item }) => {
           const status = noteStatus(item);
           const preview = notePreview(item);
+          const busy = status?.label === "변환 중";
           return (
             <Pressable
               style={styles.noteCard}
@@ -329,7 +418,47 @@ function HomeScreen({
                     </Text>
                   </View>
                 )}
+                {busy && (
+                  <Pressable
+                    hitSlop={8}
+                    onPress={() =>
+                      Alert.alert(
+                        "변환 취소",
+                        "텍스트 변환을 취소할까요? 노트와 녹음이 삭제됩니다.",
+                        [
+                          { text: "계속 변환", style: "cancel" },
+                          {
+                            text: "취소하고 삭제",
+                            style: "destructive",
+                            onPress: async () => {
+                              const paths = item.recordings
+                                .map((r) => r.storage_path)
+                                .filter((p) => p.length > 0);
+                              if (paths.length > 0) {
+                                await supabase.storage
+                                  .from("recordings")
+                                  .remove(paths);
+                              }
+                              await supabase
+                                .from("notes")
+                                .delete()
+                                .eq("id", item.id);
+                              sync();
+                            },
+                          },
+                        ]
+                      )
+                    }
+                  >
+                    <Text style={styles.cancelX}>×</Text>
+                  </Pressable>
+                )}
               </View>
+              {busy && (
+                <View style={styles.progressTrack}>
+                  <View style={[styles.progressFill, styles.progressBusy]} />
+                </View>
+              )}
               <Text style={styles.noteMeta}>
                 {new Date(item.updated_at).toLocaleString("ko-KR")}
               </Text>
@@ -486,22 +615,27 @@ const styles = StyleSheet.create({
     borderColor: C.line,
     borderRadius: 14,
     paddingVertical: 12,
+    paddingHorizontal: 16,
     alignItems: "center",
+    gap: 2,
     marginTop: 12,
   },
-  uploadText: { fontSize: 13.5, fontWeight: "700", color: C.ink },
-  pendingBanner: {
-    backgroundColor: C.goldSoft,
-    borderRadius: 12,
-    padding: 12,
-    marginTop: 10,
+  uploadText: { fontSize: 14, fontWeight: "700", color: C.ink },
+  uploadSub: { fontSize: 11.5, color: C.inkSoft },
+  progressTrack: {
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: C.surface2,
+    marginTop: 8,
+    overflow: "hidden",
   },
-  pendingText: {
-    color: C.goldDeep,
-    fontSize: 13,
-    textAlign: "center",
-    lineHeight: 19,
+  progressFill: {
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: C.sage,
   },
+  progressBusy: { width: "38%", backgroundColor: C.sky, alignSelf: "flex-start" },
+  cancelX: { fontSize: 20, color: C.inkSoft, marginLeft: 2, lineHeight: 22 },
   search: {
     borderWidth: 1,
     borderColor: C.line,
@@ -537,8 +671,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   noteTitle: {
-    fontSize: 15,
-    fontWeight: "700",
+    fontSize: 15.5,
+    fontWeight: "800",
     color: C.ink,
     flex: 1,
   },

@@ -44,6 +44,7 @@ create table if not exists public.notes (
   title text not null default '',
   memo text not null default '',
   status text not null default 'draft' check (status in ('draft', 'active', 'archived')),
+  tags jsonb not null default '[]'::jsonb, -- 자유 태그 [{name, value}] (분야/장소/취재원 등)
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

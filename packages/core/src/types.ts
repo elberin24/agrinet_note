@@ -13,12 +13,19 @@ export interface Profile {
   created_at: string;
 }
 
+// 노트에 붙는 자유 태그 (예: {name:"분야", value:"축산"}, {name:"취재원", value:"김과장"})
+export interface NoteTag {
+  name: string;
+  value: string;
+}
+
 export interface Note {
   id: string;
   user_id: string;
   title: string;
   memo: string;
   status: NoteStatus;
+  tags: NoteTag[] | null;
   created_at: string;
   updated_at: string;
 }
