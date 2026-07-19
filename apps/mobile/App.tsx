@@ -202,13 +202,40 @@ function HomeScreen({
     return remaining;
   }, [session.user.id]);
 
-  // 실패한 큐 항목 카드 탭 → 재업로드 여부 확인
+  // 실패 항목 삭제 — 목록에서만 지울지, 폰의 원본 파일까지 지울지 선택
+  function askDeleteFailed(item: QueueItem) {
+    Alert.alert(
+      "실패 항목 삭제",
+      `"${queueItemTitle(item)}"\n원본 파일 처리 방법을 선택하세요.`,
+      [
+        { text: "취소", style: "cancel" },
+        {
+          text: "목록에서만 삭제",
+          onPress: async () => {
+            await cancelAndRemove(item.id);
+            sync();
+          },
+        },
+        {
+          text: "원본 파일도 삭제",
+          style: "destructive",
+          onPress: async () => {
+            await cancelAndRemove(item.id, { deleteLocalFile: true });
+            sync();
+          },
+        },
+      ]
+    );
+  }
+
+  // 실패한 큐 항목 카드 탭 → 재업로드/삭제 선택
   function askRetry(item: QueueItem) {
     Alert.alert(
       "재업로드 하시겠습니까?",
       `"${queueItemTitle(item)}"\n실패 사유: ${item.lastError ?? "알 수 없음"}`,
       [
         { text: "나중에", style: "cancel" },
+        { text: "삭제…", onPress: () => askDeleteFailed(item) },
         {
           text: "재업로드",
           onPress: async () => {
@@ -260,19 +287,43 @@ function HomeScreen({
     });
     if (res.canceled || !res.assets?.[0]) return;
     const asset = res.assets[0];
-    try {
-      // 로컬 보존 → 업로드 → STT (녹음과 동일 파이프라인)
-      await enqueueFile(asset.uri, asset.name);
-      const remaining = await sync();
+
+    // 용량 사전 검사 — 실패할 업로드는 시작 전에 알려준다
+    const sizeMB = (asset.size ?? 0) / (1024 * 1024);
+    if (sizeMB > 50) {
       Alert.alert(
-        "파일 등록됨",
-        remaining === 0
-          ? "업로드가 끝났고 텍스트 변환이 시작됩니다."
-          : "폰에 보관됐습니다. 네트워크가 연결되면 자동으로 업로드합니다."
+        "파일이 너무 큽니다",
+        `이 파일은 ${Math.round(sizeMB)}MB입니다.\n현재 저장소 플랜의 업로드 한도는 파일당 50MB입니다.\n\n긴 통화녹음은 편집 앱에서 나눠서 올려주세요. (장시간 파일 자동 분할 기능은 준비 중입니다)`
       );
-    } catch (e) {
-      Alert.alert("업로드 불가", e instanceof Error ? e.message : String(e));
+      return;
     }
+    const doEnqueue = async () => {
+      try {
+        // 로컬 보존 → 업로드 → STT (녹음과 동일 파이프라인)
+        await enqueueFile(asset.uri, asset.name);
+        const remaining = await sync();
+        Alert.alert(
+          "파일 등록됨",
+          remaining === 0
+            ? "업로드가 끝났고 텍스트 변환이 시작됩니다."
+            : "폰에 보관됐습니다. 네트워크가 연결되면 자동으로 업로드합니다."
+        );
+      } catch (e) {
+        Alert.alert("업로드 불가", e instanceof Error ? e.message : String(e));
+      }
+    };
+    if (sizeMB > 25) {
+      Alert.alert(
+        "변환이 실패할 수 있어요",
+        `이 파일은 ${Math.round(sizeMB)}MB입니다.\n음성 변환(AI)은 파일당 25MB까지만 지원해서, 업로드는 되지만 텍스트 변환은 실패할 수 있습니다.`,
+        [
+          { text: "취소", style: "cancel" },
+          { text: "그래도 업로드", onPress: doEnqueue },
+        ]
+      );
+      return;
+    }
+    doEnqueue();
   }
 
   function confirmDelete(note: NoteRow) {

@@ -108,8 +108,12 @@ export function enqueueFile(
   return enqueue(pickedUri, ext, null, fileName, memo);
 }
 
-// 업로드 취소 + 큐에서 제거 + 서버에 만들어진 행 정리. 로컬 원본은 남긴다.
-export async function cancelAndRemove(itemId: string): Promise<void> {
+// 업로드 취소 + 큐에서 제거 + 서버에 만들어진 행 정리.
+// deleteLocalFile을 켜면 폰에 보관된 원본 파일까지 삭제한다.
+export async function cancelAndRemove(
+  itemId: string,
+  opts?: { deleteLocalFile?: boolean }
+): Promise<void> {
   cancelledIds.add(itemId);
   const task = activeTasks.get(itemId);
   if (task) {
@@ -124,6 +128,11 @@ export async function cancelAndRemove(itemId: string): Promise<void> {
   if (item?.noteId) {
     // 노트 삭제 시 recordings/memos는 FK로 함께 정리된다
     await supabase.from("notes").delete().eq("id", item.noteId);
+  }
+  if (item && opts?.deleteLocalFile) {
+    await FileSystem.deleteAsync(item.localUri, { idempotent: true }).catch(
+      () => {}
+    );
   }
   await saveQueue(items.filter((q) => q.id !== itemId));
 }
